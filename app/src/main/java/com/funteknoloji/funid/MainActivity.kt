@@ -12,10 +12,12 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
+import android.app.DownloadManager
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.View
+import android.view.animation.AnimationUtils
 import android.webkit.*
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,6 +82,21 @@ class MainActivity : AppCompatActivity() {
         webSettings.databaseEnabled = true
         webSettings.setSupportMultipleWindows(true)
         webSettings.javaScriptCanOpenWindowsAutomatically = true
+        binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+            val request = DownloadManager.Request(Uri.parse(url))
+            request.setMimeType(mimetype)
+            val cookies = CookieManager.getInstance().getCookie(url)
+            request.addRequestHeader("cookie", cookies)
+            request.addRequestHeader("User-Agent", userAgent)
+            request.setDescription("Dosya indiriliyor...")
+            request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
+            request.allowScanningByMediaScanner()
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            dm.enqueue(request)
+            Toast.makeText(applicationContext, "Dosya indiriliyor...", Toast.LENGTH_LONG).show()
+        }
 
         // For persistent login (cookies)
         val cookieManager = CookieManager.getInstance()
@@ -235,23 +252,30 @@ class MainActivity : AppCompatActivity() {
         connectivityManager.registerNetworkCallback(networkRequest, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 runOnUiThread {
-                    binding.noInternetPopup.visibility = View.GONE
+                    if (binding.noInternetPopup.visibility == View.VISIBLE) {
+                        val slideDown = AnimationUtils.loadAnimation(this@MainActivity, R.anim.slide_down)
+                        binding.noInternetPopup.startAnimation(slideDown)
+                        binding.noInternetPopup.visibility = View.GONE
+                        binding.interactionBlocker.visibility = View.GONE
+                    }
                     if (binding.noInternetFull.visibility == View.VISIBLE) {
                         binding.noInternetFull.visibility = View.GONE
                         binding.webView.loadUrl("https://account.funteknoloji.com")
-                    } else {
-                        // If it was just a transient loss, reload might be good or just let it be
-                        // binding.webView.reload()
                     }
                 }
             }
 
             override fun onLost(network: Network) {
                 runOnUiThread {
-                    if (binding.webView.url == null || binding.webView.url == "about:blank") {
+                    if (binding.webView.url == null || binding.webView.url == "about:blank" || binding.noInternetFull.visibility == View.VISIBLE) {
                          binding.noInternetFull.visibility = View.VISIBLE
                     } else {
-                        binding.noInternetPopup.visibility = View.VISIBLE
+                        if (binding.noInternetPopup.visibility != View.VISIBLE) {
+                            val slideUp = AnimationUtils.loadAnimation(this@MainActivity, R.anim.slide_up)
+                            binding.noInternetPopup.startAnimation(slideUp)
+                            binding.noInternetPopup.visibility = View.VISIBLE
+                            binding.interactionBlocker.visibility = View.VISIBLE
+                        }
                     }
                 }
             }
