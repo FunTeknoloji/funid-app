@@ -29,6 +29,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.funteknoloji.funid.databinding.ActivityMainBinding
@@ -83,7 +84,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (!isNetworkAvailable()) {
             binding.noInternetFull.visibility = View.VISIBLE
         } else {
-            binding.webView.loadUrl("https://account.funteknoloji.com")
+            val urlToLoad = intent?.data?.toString() ?: "https://account.funteknoloji.com"
+            binding.webView.loadUrl(urlToLoad)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent?.data?.toString()?.let { url ->
+            binding.webView.loadUrl(url)
         }
     }
 
@@ -104,25 +114,33 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             try {
-                val request = DownloadManager.Request(Uri.parse(url))
-                request.setMimeType(mimetype)
-                val cookies = CookieManager.getInstance().getCookie(url)
-                request.addRequestHeader("cookie", cookies)
-                request.addRequestHeader("User-Agent", userAgent)
-                request.setDescription("Dosya indiriliyor...")
-                request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
-
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                    request.allowScanningByMediaScanner()
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 1002)
+                    return@setDownloadListener
                 }
 
+                val request = DownloadManager.Request(Uri.parse(url))
+                val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+
+                request.setMimeType(mimetype)
+                val cookies = CookieManager.getInstance().getCookie(url)
+                request.addRequestHeader("Cookie", cookies)
+                request.addRequestHeader("User-Agent", userAgent)
+                request.setDescription("Dosya indiriliyor...")
+                request.setTitle(fileName)
+
                 request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+
                 val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
                 dm.enqueue(request)
-                Toast.makeText(applicationContext, "İndirme başlatıldı", Toast.LENGTH_SHORT).show()
+                Toast.makeText(applicationContext, "Dosya indiriliyor: $fileName", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(applicationContext, "İndirme hatası: ${e.message}", Toast.LENGTH_LONG).show()
+                // If it's a blob or data URI, we might need a different approach, but for standard URLs:
+                val intent = Intent(Intent.ACTION_VIEW)
+                intent.data = Uri.parse(url)
+                startActivity(intent)
             }
         }
 
@@ -228,28 +246,26 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val y = event.values[1]
             val z = event.values[2]
 
-            val gX = x / SensorManager.GRAVITY_EARTH
-            val gY = y / SensorManager.GRAVITY_EARTH
-            val gZ = z / SensorManager.GRAVITY_EARTH
-
-            val gForce = sqrt(gX * gX + gY * gY + gZ * gZ)
-
-            if (gForce > 2.5f) { // Approximately threshold 12 in m/s^2 if we consider gForce > 2.5 * 9.8 ~ 24,
-                // wait, 12 m/s^2 is what was asked.
-                // gForce 1.0 is idle. 12 m/s^2 total acceleration (including gravity) is roughly gForce 1.22.
-                // But usually "shake" is higher. Let's use 12 m/s^2 as requested.
-                // sqrt(x*x + y*y + z*z) > 12
-            }
-
             val totalAcc = sqrt(x * x + y * y + z * z)
-            if (totalAcc > 12.0f) {
+            // Increased threshold to 15.0f for harder shake
+            if (totalAcc > 15.0f) {
                 val currentTime = System.currentTimeMillis()
-                if (currentTime - lastShakeTime > 2000) {
+                // Increased cooldown to 5 seconds
+                if (currentTime - lastShakeTime > 5000) {
                     lastShakeTime = currentTime
                     binding.webView.evaluateJavascript("if(window.openFeedback) { window.openFeedback(); }", null)
-                    Toast.makeText(this, "Geri Bildirim Açılıyor...", Toast.LENGTH_SHORT).show()
+                    vibrateDevice()
                 }
             }
+        }
+    }
+
+    private fun vibrateDevice() {
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createOneShot(300, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            vibrator.vibrate(300)
         }
     }
 
