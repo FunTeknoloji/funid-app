@@ -39,14 +39,13 @@
         <ImageView
             android:layout_width="64dp"
             android:layout_height="64dp"
-            android:src="@android:drawable/ic_dialog_alert"
-            app:tint="#FFD700" />
+            android:src="@drawable/ic_no_internet" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="Bağlantı Kesildi"
+            android:text="İnternet bağlantısı yok"
             android:textColor="@color/white"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -78,8 +77,7 @@
             <ImageView
                 android:layout_width="140dp"
                 android:layout_height="140dp"
-                android:src="@android:drawable/ic_dialog_alert"
-                app:tint="#FFD700" />
+                android:src="@drawable/ic_no_internet" />
 
             <TextView
                 android:layout_width="wrap_content"

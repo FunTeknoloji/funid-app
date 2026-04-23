@@ -6,6 +6,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -15,6 +19,8 @@ import android.os.Build
 import android.app.DownloadManager
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.view.View
 import android.view.animation.AnimationUtils
@@ -23,7 +29,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.funteknoloji.funid.databinding.ActivityMainBinding
@@ -31,12 +36,17 @@ import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.sqrt
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private lateinit var binding: ActivityMainBinding
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var cameraPhotoPath: String? = null
+
+    private lateinit var sensorManager: SensorManager
+    private var accelerometer: Sensor? = null
+    private var lastShakeTime: Long = 0
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -55,11 +65,16 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         checkAndRequestPermissions()
         setupConnectivityObserver()
+        setupShakeSensor()
 
         binding.retryButton.setOnClickListener {
             if (isNetworkAvailable()) {
                 binding.noInternetFull.visibility = View.GONE
-                binding.webView.reload()
+                if (binding.webView.url == null || binding.webView.url == "about:blank") {
+                    binding.webView.loadUrl("https://account.funteknoloji.com")
+                } else {
+                    binding.webView.reload()
+                }
             } else {
                 Toast.makeText(this, "Hala internet yok", Toast.LENGTH_SHORT).show()
             }
@@ -82,6 +97,11 @@ class MainActivity : AppCompatActivity() {
         webSettings.databaseEnabled = true
         webSettings.setSupportMultipleWindows(true)
         webSettings.javaScriptCanOpenWindowsAutomatically = true
+
+        // Performance
+        webSettings.setRenderPriority(WebSettings.RenderPriority.HIGH)
+        webSettings.cacheMode = WebSettings.LOAD_DEFAULT
+
         binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
             try {
                 val request = DownloadManager.Request(Uri.parse(url))
@@ -100,9 +120,9 @@ class MainActivity : AppCompatActivity() {
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
                 val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
                 dm.enqueue(request)
-                Toast.makeText(applicationContext, "Dosya indiriliyor...", Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, "İndirme başlatıldı", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(applicationContext, "İndirme başlatılamadı: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, "İndirme hatası: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -119,21 +139,23 @@ class MainActivity : AppCompatActivity() {
                 CookieManager.getInstance().flush()
             }
 
-            override fun onReceivedError(
-                view: WebView?,
-                request: WebResourceRequest?,
-                error: WebResourceError?
-            ) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    if (request?.isForMainFrame == true) {
-                        // binding.noInternetFull.visibility = View.VISIBLE
-                    }
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return false
+                if (url.startsWith("https://account.funteknoloji.com")) {
+                    return false
+                }
+                // Open external links in browser
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    startActivity(intent)
+                    return true
+                } catch (e: Exception) {
+                    return false
                 }
             }
         }
 
         binding.webView.webChromeClient = object : WebChromeClient() {
-            // Camera and File Upload support
             override fun onShowFileChooser(
                 webView: WebView?,
                 filePathCallback: ValueCallback<Array<Uri>>?,
@@ -143,26 +165,19 @@ class MainActivity : AppCompatActivity() {
                 this@MainActivity.filePathCallback = filePathCallback
 
                 val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                if (takePictureIntent.resolveActivity(packageManager) != null) {
-                    var photoFile: File? = null
-                    try {
-                        photoFile = createImageFile()
-                        takePictureIntent.putExtra("PhotoPath", cameraPhotoPath)
-                    } catch (ex: IOException) {
-                        // Error occurred while creating the File
-                    }
+                var photoFile: File? = null
+                try {
+                    photoFile = createImageFile()
+                } catch (ex: IOException) {}
 
-                    if (photoFile != null) {
-                        cameraPhotoPath = "file:" + photoFile.absolutePath
-                        val photoURI = FileProvider.getUriForFile(
-                            this@MainActivity,
-                            "${packageName}.fileprovider",
-                            photoFile
-                        )
-                        takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
-                    } else {
-                        takePictureIntent.run {  }
-                    }
+                if (photoFile != null) {
+                    cameraPhotoPath = "file:" + photoFile.absolutePath
+                    val photoURI = FileProvider.getUriForFile(
+                        this@MainActivity,
+                        "${packageName}.fileprovider",
+                        photoFile
+                    )
+                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
                 }
 
                 val contentSelectionIntent = Intent(Intent.ACTION_GET_CONTENT)
@@ -177,7 +192,6 @@ class MainActivity : AppCompatActivity() {
                 chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentArray)
 
                 startActivityForResult(chooserIntent, INPUT_FILE_REQUEST_CODE)
-
                 return true
             }
 
@@ -187,12 +201,59 @@ class MainActivity : AppCompatActivity() {
             ) {
                 callback?.invoke(origin, true, false)
             }
+        }
+    }
 
-            override fun onPermissionRequest(request: PermissionRequest?) {
-                request?.grant(request.resources)
+    private fun setupShakeSensor() {
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        accelerometer?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event == null) return
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+
+            val gX = x / SensorManager.GRAVITY_EARTH
+            val gY = y / SensorManager.GRAVITY_EARTH
+            val gZ = z / SensorManager.GRAVITY_EARTH
+
+            val gForce = sqrt(gX * gX + gY * gY + gZ * gZ)
+
+            if (gForce > 2.5f) { // Approximately threshold 12 in m/s^2 if we consider gForce > 2.5 * 9.8 ~ 24,
+                // wait, 12 m/s^2 is what was asked.
+                // gForce 1.0 is idle. 12 m/s^2 total acceleration (including gravity) is roughly gForce 1.22.
+                // But usually "shake" is higher. Let's use 12 m/s^2 as requested.
+                // sqrt(x*x + y*y + z*z) > 12
+            }
+
+            val totalAcc = sqrt(x * x + y * y + z * z)
+            if (totalAcc > 12.0f) {
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastShakeTime > 2000) {
+                    lastShakeTime = currentTime
+                    binding.webView.evaluateJavascript("if(window.openFeedback) { window.openFeedback(); }", null)
+                    Toast.makeText(this, "Geri Bildirim Açılıyor...", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     private fun createImageFile(): File? {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -208,7 +269,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         var results: Array<Uri>? = null
-
         if (resultCode == Activity.RESULT_OK) {
             if (data == null || data.data == null) {
                 if (cameraPhotoPath != null) {
@@ -231,8 +291,11 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.CAMERA,
             Manifest.permission.ACCESS_FINE_LOCATION
         )
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
         val neededPermissions = permissions.filter {
@@ -247,11 +310,11 @@ class MainActivity : AppCompatActivity() {
     private fun showPermissionRationale() {
         AlertDialog.Builder(this)
             .setTitle("İzin Gerekli")
-            .setMessage("Uygulamanın tam fonksiyonel çalışması için kamera, konum ve dosya erişim izinleri gereklidir.")
-            .setPositiveButton("Tekrar Dene") { _, _ ->
+            .setMessage("Uygulamanın kamera, konum ve dosya yükleme özelliklerini kullanabilmesi için bu izinler gereklidir.")
+            .setPositiveButton("İzin Ver") { _, _ ->
                 checkAndRequestPermissions()
             }
-            .setNegativeButton("Kapat", null)
+            .setNegativeButton("İptal", null)
             .show()
     }
 
@@ -269,6 +332,7 @@ class MainActivity : AppCompatActivity() {
                         binding.noInternetPopup.startAnimation(slideDown)
                         binding.noInternetPopup.visibility = View.GONE
                         binding.interactionBlocker.visibility = View.GONE
+                        binding.webView.reload()
                     }
                     if (binding.noInternetFull.visibility == View.VISIBLE) {
                         binding.noInternetFull.visibility = View.GONE
@@ -299,10 +363,7 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val nw = connectivityManager.activeNetwork ?: return false
             val actNw = connectivityManager.getNetworkCapabilities(nw) ?: return false
-            return when {
-                actNw.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> true
-                else -> false
-            }
+            return actNw.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         } else {
             val nwInfo = connectivityManager.activeNetworkInfo ?: return false
             return nwInfo.isConnected
