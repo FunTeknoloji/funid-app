@@ -82,20 +82,28 @@ class MainActivity : AppCompatActivity() {
         webSettings.databaseEnabled = true
         webSettings.setSupportMultipleWindows(true)
         webSettings.javaScriptCanOpenWindowsAutomatically = true
-        binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-            val request = DownloadManager.Request(Uri.parse(url))
-            request.setMimeType(mimetype)
-            val cookies = CookieManager.getInstance().getCookie(url)
-            request.addRequestHeader("cookie", cookies)
-            request.addRequestHeader("User-Agent", userAgent)
-            request.setDescription("Dosya indiriliyor...")
-            request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
-            request.allowScanningByMediaScanner()
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
-            val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(request)
-            Toast.makeText(applicationContext, "Dosya indiriliyor...", Toast.LENGTH_LONG).show()
+        binding.webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+            try {
+                val request = DownloadManager.Request(Uri.parse(url))
+                request.setMimeType(mimetype)
+                val cookies = CookieManager.getInstance().getCookie(url)
+                request.addRequestHeader("cookie", cookies)
+                request.addRequestHeader("User-Agent", userAgent)
+                request.setDescription("Dosya indiriliyor...")
+                request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
+
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    request.allowScanningByMediaScanner()
+                }
+
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
+                val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                dm.enqueue(request)
+                Toast.makeText(applicationContext, "Dosya indiriliyor...", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(applicationContext, "İndirme başlatılamadı: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
 
         // For persistent login (cookies)
@@ -178,6 +186,10 @@ class MainActivity : AppCompatActivity() {
                 callback: GeolocationPermissions.Callback?
             ) {
                 callback?.invoke(origin, true, false)
+            }
+
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                request?.grant(request.resources)
             }
         }
     }
